@@ -70,6 +70,109 @@ def get_credentials(env_file='.env'):
     
     return creds_list
 
+def compare_and_append_oi_change(worksheet_330pm, spreadsheet, sheet_name_330pm, spreadsheet_id, credentials_file="credentials.json"):
+    """
+    Compare 2:50 PM and 3:30 PM OI data and append 40-minute change columns to 3:30 PM sheet.
+    
+    Args:
+        worksheet_330pm: Worksheet object for 3:30 PM sheet
+        spreadsheet: Spreadsheet object
+        sheet_name_330pm: Name of 3:30 PM sheet (e.g., '2026-03-03_1530')
+        spreadsheet_id: Google Sheets spreadsheet ID
+        credentials_file: Path to credentials JSON
+    """
+    try:
+        # Extract date from sheet_name (YYYY-MM-DD)
+        date_part = sheet_name_330pm.split('_')[0]  # '2026-03-03'
+        sheet_name_250pm = f"{date_part}_1450"  # 2:50 PM sheet
+        
+        print(f"\n⏱️ Comparing OI between {sheet_name_250pm} and {sheet_name_330pm}...")
+        
+        # Try to get 2:50 PM sheet
+        try:
+            worksheet_250pm = spreadsheet.worksheet(sheet_name_250pm)
+        except gspread.exceptions.WorksheetNotFound:
+            print(f"⚠️ 2:50 PM sheet '{sheet_name_250pm}' not found. Skipping comparison.")
+            return
+        
+        # Read both sheets
+        data_330pm = worksheet_330pm.get_all_records()
+        data_250pm = worksheet_250pm.get_all_records()
+        
+        if not data_330pm or not data_250pm:
+            print(f"⚠️ One of the sheets is empty. Skipping comparison.")
+            return
+        
+        # Create a mapping for 2:50 PM data: (Symbol, Strike) -> OI
+        oi_map_250pm = {}
+        for row in data_250pm:
+            key = (row.get('Symbol', ''), str(row.get('Strike', '')))
+            try:
+                oi_val = float(row.get('OI', 0))
+                oi_map_250pm[key] = oi_val
+            except (ValueError, TypeError):
+                pass
+        
+        # Calculate differences and prepare update data
+        comparison_rows = []
+        for idx, row_330pm in enumerate(data_330pm):
+            symbol = row_330pm.get('Symbol', '')
+            strike = str(row_330pm.get('Strike', ''))
+            
+            try:
+                oi_330pm = float(row_330pm.get('OI', 0))
+            except (ValueError, TypeError):
+                oi_330pm = 0
+            
+            key = (symbol, strike)
+            oi_250pm = oi_map_250pm.get(key, 0)
+            
+            # Calculate 40-minute change
+            if oi_250pm > 0:
+                oi_change_abs = oi_330pm - oi_250pm
+                oi_change_pct = (oi_change_abs / oi_250pm) * 100
+            else:
+                oi_change_abs = 0
+                oi_change_pct = 0
+            
+            comparison_rows.append({
+                'row_index': idx + 2,  # +2 because Google Sheets is 1-indexed and row 1 is header
+                'oi_change_abs': oi_change_abs,
+                'oi_change_pct': oi_change_pct
+            })
+        
+        # Append new columns to the 3:30 PM sheet
+        # Column L: "40-Min OI Change", Column M: "40-Min OI % Change"
+        new_col_data = []
+        new_col_data.append(['40-Min OI Change', '40-Min OI % Change'])  # Headers
+        
+        for comp in comparison_rows:
+            new_col_data.append([
+                str(int(comp['oi_change_abs'])),
+                f"{comp['oi_change_pct']:.2f}%"
+            ])
+        
+        # Write new columns starting at column L (12th column)
+        worksheet_330pm.update('L1', new_col_data)
+        
+        # Find top movers for logging
+        top_movers = sorted(comparison_rows, key=lambda x: abs(x['oi_change_abs']), reverse=True)[:5]
+        
+        print(f"✅ Added comparison columns to {sheet_name_330pm}")
+        print(f"\n🔥 Top 5 OI Movers (40-min change):")
+        for i, mover in enumerate(top_movers, 1):
+            if mover['oi_change_abs'] != 0:
+                symbol_info = data_330pm[mover['row_index']-2]
+                symbol = symbol_info.get('Symbol', 'N/A')
+                change_val = int(mover['oi_change_abs'])
+                pct_val = mover['oi_change_pct']
+                print(f"   {i}. {symbol}: {change_val:+d} contracts ({pct_val:+.2f}%)")
+        
+    except Exception as e:
+        print(f"⚠️ Error comparing OI data: {e}")
+        traceback.print_exc()
+        # Don't fail the whole script if comparison fails
+
 def write_to_google_sheets(data_rows, fieldnames, spreadsheet_id=None, credentials_file="credentials.json"):
     """
     Write data to Google Sheets.
@@ -687,6 +790,10 @@ def fetch_live_oi():
         if sheets_available:
             print(f"✅ Total {len(all_data_rows)} rows synced to Google Sheets!")
             print(f"   📅 Sheet name: {sheet_name} (Date + Time)")
+            
+            # Run comparison at 3:30 PM (after fetching data, compare with 2:50 PM)
+            if "1530" in sheet_name:
+                compare_and_append_oi_change(worksheet, spreadsheet, sheet_name, SPREADSHEET_ID, CREDENTIALS_FILE)
         else:
             print(f"ℹ️ Google Sheets sync was skipped (permission issue). Data saved to CSV only.")
         
