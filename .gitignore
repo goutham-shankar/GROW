@@ -1,0 +1,60 @@
+# Credentials and API Keys
+TEST.txt
+credentials.json
+.env
+.env.local
+secrets.json
+
+# Output files
+GROWW_OI_Export.csv
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Backup files
+*.bak
+*.backup
+bak.bak
+
+# Test files (optional - remove if you want to keep them)
+debug_chain.py
+inspect_quote.py
+inspect_quote_v2.py
+list_keys.py
+tes.py
+tess.py
+verify_values.py
