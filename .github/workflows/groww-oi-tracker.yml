@@ -48,7 +48,7 @@ jobs:
       
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: oi-data-${{ github.run_id }}
           path: GROWW_OI_Export.csv
