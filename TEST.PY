@@ -8,14 +8,23 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from growwapi import GrowwAPI
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import timezone, timedelta
 
 def get_sheet_name_with_timestamp():
     """
-    Generate a sheet name with current date and time.
+    Generate a sheet name with current date and time in IST.
     Format: YYYY-MM-DD_HHMM (e.g., 2026-03-03_0930)
     """
-    now = datetime.now()
-    return now.strftime('%Y-%m-%d_%H%M')
+    # Convert UTC to IST (UTC + 5:30)
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_utc = datetime.now(timezone.utc)
+    now_ist = now_utc.astimezone(ist)
+    sheet_name = now_ist.strftime('%Y-%m-%d_%H%M')
+    
+    print(f"⏰ Current time: UTC {now_utc.strftime('%H:%M:%S')} → IST {now_ist.strftime('%H:%M:%S')}")
+    print(f"📊 Sheet name: '{sheet_name}' (Date_Time in IST)")
+    
+    return sheet_name
 
 def get_credentials(env_file='.env'):
     """
@@ -479,7 +488,6 @@ def fetch_live_oi():
 
         # Generate timestamped sheet name (e.g., 2026-03-03_0930)
         sheet_name = get_sheet_name_with_timestamp()
-        print(f"\n📊 Sheet name: '{sheet_name}' (Date_Time)")
         
         # Initialize Google Sheet with headers
         SPREADSHEET_ID = "1iGiZxhDXZRzHegcJtee5twNM0TzC3kTtEPRyabykuRs"
