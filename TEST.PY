@@ -29,8 +29,8 @@ def get_credentials(file_path):
     
     if api_key_env and secret_env:
         print("Loading credentials from environment variables...")
-        creds['api_key'] = api_key_env
-        creds['secret'] = secret_env
+        creds['api_key'] = api_key_env.strip()
+        creds['secret'] = secret_env.strip()
         return creds
     
     # Fall back to file
