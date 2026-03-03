@@ -32,18 +32,21 @@ jobs:
       
       - name: Create Groww credentials
         run: |
-          echo "" > TEST.txt
-          echo "${{ secrets.GROWW_API_KEY }}" >> TEST.txt
-          echo "" >> TEST.txt
-          echo "" >> TEST.txt
-          echo "" >> TEST.txt
-          echo "${{ secrets.GROWW_SECRET }}" >> TEST.txt
+          echo "" > TEST.TXT
+          echo "${{ secrets.GROWW_API_KEY }}" >> TEST.TXT
+          echo "" >> TEST.TXT
+          echo "" >> TEST.TXT
+          echo "" >> TEST.TXT
+          echo "${{ secrets.GROWW_SECRET }}" >> TEST.TXT
       
       - name: Create Google credentials
         run: |
           echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credentials.json
       
       - name: Run OI Tracker
+        env:
+          GROWW_API_KEY: ${{ secrets.GROWW_API_KEY }}
+          GROWW_SECRET: ${{ secrets.GROWW_SECRET }}
         run: python TEST.PY
       
       - name: Upload results
