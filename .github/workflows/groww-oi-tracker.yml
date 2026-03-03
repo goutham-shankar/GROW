@@ -47,6 +47,8 @@ jobs:
         env:
           GROWW_API_KEY: ${{ secrets.GROWW_API_KEY }}
           GROWW_SECRET: ${{ secrets.GROWW_SECRET }}
+          GROWW_API_KEY_2: ${{ secrets.GROWW_API_KEY_2 }}
+          GROWW_SECRET_2: ${{ secrets.GROWW_SECRET_2 }}
         run: python TEST.PY
       
       - name: Upload results
