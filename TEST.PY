@@ -117,8 +117,8 @@ def write_to_google_sheets(data_rows, fieldnames, spreadsheet_id=None, credentia
         # Write data to sheet
         worksheet.update('A1', sheet_data)
         
-        # Format header row (bold)
-        worksheet.format('A1:K1', {'textFormat': {'bold': True}})
+        # Apply conditional formatting
+        apply_conditional_formatting(worksheet, spreadsheet, worksheet.title)
         
         print(f"\n✅ Successfully wrote {len(data_rows)} rows to Google Sheets!")
         print(f"📊 Spreadsheet URL: {spreadsheet.url}")
@@ -165,7 +165,8 @@ def append_to_google_sheets(data_rows, fieldnames, spreadsheet_id, credentials_f
             worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
             # Add headers to the new sheet
             worksheet.append_row(fieldnames)
-            worksheet.format('A1:K1', {'textFormat': {'bold': True}})
+            # Apply conditional formatting to new sheet
+            apply_conditional_formatting(worksheet, spreadsheet, sheet_name)
         
         # Prepare rows to append
         rows_to_append = []
@@ -187,6 +188,120 @@ def append_to_google_sheets(data_rows, fieldnames, spreadsheet_id, credentials_f
         return False
 
 
+def apply_conditional_formatting(worksheet, spreadsheet, sheet_name):
+    """
+    Apply conditional formatting to the worksheet:
+    - Blue header with white text
+    - Green for positive OI Change %, Red for negative
+    - Color gradient for Vol/OI Ratio
+    """
+    try:
+        # Get the sheet ID
+        sheet_id = worksheet.id
+        
+        # Build batch update requests
+        requests = []
+        
+        # 1. Format header row - Blue background (#4A86E8) with white bold text
+        requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 0,
+                    "endRowIndex": 1
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {"red": 0.29, "green": 0.53, "blue": 0.91},
+                        "textFormat": {"foregroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0}, "bold": True},
+                        "horizontalAlignment": "CENTER"
+                    }
+                },
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
+            }
+        })
+        
+        # 2. Conditional formatting for OI Change % (Column I - index 8)
+        # Green for positive values
+        requests.append({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 8, "endColumnIndex": 9}],
+                    "booleanRule": {
+                        "condition": {"type": "NUMBER_GREATER", "values": [{"userEnteredValue": "0"}]},
+                        "format": {"backgroundColor": {"red": 0.85, "green": 0.92, "blue": 0.83}}  # Light green
+                    }
+                },
+                "index": 0
+            }
+        })
+        
+        # Red for negative values
+        requests.append({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 8, "endColumnIndex": 9}],
+                    "booleanRule": {
+                        "condition": {"type": "NUMBER_LESS", "values": [{"userEnteredValue": "0"}]},
+                        "format": {"backgroundColor": {"red": 0.96, "green": 0.8, "blue": 0.8}}  # Light red
+                    }
+                },
+                "index": 1
+            }
+        })
+        
+        # 3. Conditional formatting for Vol/OI Ratio (Column J - index 9)
+        # Red for high ratio (>2.0)
+        requests.append({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 9, "endColumnIndex": 10}],
+                    "booleanRule": {
+                        "condition": {"type": "NUMBER_GREATER", "values": [{"userEnteredValue": "2"}]},
+                        "format": {"backgroundColor": {"red": 1.0, "green": 0.85, "blue": 0.4}}  # Light orange/red
+                    }
+                },
+                "index": 2
+            }
+        })
+        
+        # Yellow for moderate ratio (1.0-2.0)
+        requests.append({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 9, "endColumnIndex": 10}],
+                    "booleanRule": {
+                        "condition": {"type": "NUMBER_BETWEEN", "values": [{"userEnteredValue": "1"}, {"userEnteredValue": "2"}]},
+                        "format": {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}}  # Light yellow
+                    }
+                },
+                "index": 3
+            }
+        })
+        
+        # Green for low ratio (<1.0)
+        requests.append({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 9, "endColumnIndex": 10}],
+                    "booleanRule": {
+                        "condition": {"type": "NUMBER_LESS", "values": [{"userEnteredValue": "1"}]},
+                        "format": {"backgroundColor": {"red": 0.85, "green": 0.92, "blue": 0.83}}  # Light green
+                    }
+                },
+                "index": 4
+            }
+        })
+        
+        # Execute batch update
+        spreadsheet.batch_update({"requests": requests})
+        print("🎨 Applied conditional formatting: OI Change % and Vol/OI Ratio")
+        
+    except Exception as e:
+        print(f"⚠️ Warning: Could not apply formatting: {e}")
+        # Continue without formatting - not critical
+
+
 def initialize_google_sheet(fieldnames, spreadsheet_id, credentials_file="credentials.json", sheet_name=None):
     """
     Initialize Google Sheet by creating or getting a timestamped sheet and adding headers.
@@ -196,13 +311,16 @@ def initialize_google_sheet(fieldnames, spreadsheet_id, credentials_file="creden
         spreadsheet_id: Google Sheets spreadsheet ID
         credentials_file: Path to Google Service Account JSON credentials
         sheet_name: Name of the sheet with timestamp (e.g., 2026-03-03_0930)
+        
+    Returns:
+        tuple: (success: bool, worksheet, spreadsheet) or (False, None, None)
     """
     try:
         # Check if credentials file exists
         if not os.path.exists(credentials_file):
             print(f"❌ Credentials file not found: {credentials_file}")
             print(f"   Current directory: {os.getcwd()}")
-            return False
+            return (False, None, None)
         
         # Load credentials to get service account email
         import json
@@ -226,6 +344,7 @@ def initialize_google_sheet(fieldnames, spreadsheet_id, credentials_file="creden
         try:
             worksheet = spreadsheet.worksheet(sheet_name)
             print(f"✅ Using existing sheet: '{sheet_name}'")
+            is_new_sheet = False
         except gspread.exceptions.WorksheetNotFound:
             # Create new worksheet if it doesn't exist
             worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
@@ -233,17 +352,21 @@ def initialize_google_sheet(fieldnames, spreadsheet_id, credentials_file="creden
             
             # Add header to the new sheet
             worksheet.append_row(fieldnames)
-            worksheet.format('A1:K1', {'textFormat': {'bold': True}})
+            is_new_sheet = True
+        
+        # Apply conditional formatting (for new sheets or to refresh existing)
+        if is_new_sheet:
+            apply_conditional_formatting(worksheet, spreadsheet, sheet_name)
         
         print(f"📊 Spreadsheet URL: {spreadsheet.url}\n")
         
-        return True
+        return (True, worksheet, spreadsheet)
         
     except Exception as e:
         print(f"❌ Error initializing Google Sheets: {e}")
         print(f"Error type: {type(e).__name__}")
         traceback.print_exc()
-        return False
+        return (False, None, None)
 
 
 def classify_signal(ltp, close, oi_change):
@@ -494,7 +617,7 @@ def fetch_live_oi():
         CREDENTIALS_FILE = "credentials.json"
         
         print(f"📊 Initializing Google Sheet...")
-        sheets_available = initialize_google_sheet(fieldnames, SPREADSHEET_ID, CREDENTIALS_FILE, sheet_name)
+        sheets_available, worksheet, spreadsheet = initialize_google_sheet(fieldnames, SPREADSHEET_ID, CREDENTIALS_FILE, sheet_name)
         
         if not sheets_available:
             print("\n⚠️ Google Sheets not available - continuing with CSV only...")
