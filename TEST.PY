@@ -18,10 +18,11 @@ def get_sheet_name_with_timestamp():
 
 def get_credentials(file_path):
     """
-    Reads API Key and Secret from file or environment variables.
+    Reads API Key and Secret (both pairs) from file or environment variables.
     Priority: Environment variables > File
+    Returns list of dicts with 'api_key' and 'secret' (supports dual API keys)
     """
-    creds = {}
+    creds_list = []
     
     # Try environment variables first (for GitHub Actions)
     api_key_env = os.getenv('GROWW_API_KEY')
@@ -29,20 +30,37 @@ def get_credentials(file_path):
     
     if api_key_env and secret_env:
         print("Loading credentials from environment variables...")
-        creds['api_key'] = api_key_env.strip()
-        creds['secret'] = secret_env.strip()
-        return creds
+        creds_list.append({
+            'api_key': api_key_env.strip(),
+            'secret': secret_env.strip()
+        })
+        return creds_list
     
     # Fall back to file
     try:
         with open(file_path, 'r') as f:
             lines = [line.strip() for line in f.readlines()]
+            print(f"Loading credentials from {file_path}...")
+            
+            # Read first API key pair
             if len(lines) >= 6:
-                creds['api_key'] = lines[1] # Line 2 (API Key/JWT)
-                creds['secret'] = lines[5]  # Line 6 (Secret)
-                print(f"Loading credentials from {file_path}...")
+                creds_list.append({
+                    'api_key': lines[1],  # Line 2 (API Key/JWT)
+                    'secret': lines[4]     # Line 5 (Secret) - adjusted for label rows
+                })
+            
+            # Read second API key pair if available
+            if len(lines) >= 13:
+                creds_list.append({
+                    'api_key': lines[7],   # Line 8 (API Key 2)
+                    'secret': lines[12]    # Line 13 (Secret 2)
+                })
+                print(f"✅ Loaded {len(creds_list)} API credential pairs")
+            elif len(lines) >= 6:
+                print(f"⚠️ Only one API key found. Using single API key.")
             else:
                 print("Error: TEST.TXT does not have enough lines.")
+                
     except FileNotFoundError:
         print(f"Error: {file_path} not found and environment variables not set.")
         print("Please either:")
@@ -51,7 +69,7 @@ def get_credentials(file_path):
     except Exception as e:
         print(f"Error reading credentials: {e}")
     
-    return creds
+    return creds_list
 
 def write_to_google_sheets(data_rows, fieldnames, spreadsheet_id=None, credentials_file="credentials.json"):
     """
@@ -101,7 +119,7 @@ def write_to_google_sheets(data_rows, fieldnames, spreadsheet_id=None, credentia
         worksheet.update('A1', sheet_data)
         
         # Format header row (bold)
-        worksheet.format('A1:J1', {'textFormat': {'bold': True}})
+        worksheet.format('A1:K1', {'textFormat': {'bold': True}})
         
         print(f"\n✅ Successfully wrote {len(data_rows)} rows to Google Sheets!")
         print(f"📊 Spreadsheet URL: {spreadsheet.url}")
@@ -148,7 +166,7 @@ def append_to_google_sheets(data_rows, fieldnames, spreadsheet_id, credentials_f
             worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
             # Add headers to the new sheet
             worksheet.append_row(fieldnames)
-            worksheet.format('A1:J1', {'textFormat': {'bold': True}})
+            worksheet.format('A1:K1', {'textFormat': {'bold': True}})
         
         # Prepare rows to append
         rows_to_append = []
@@ -216,7 +234,7 @@ def initialize_google_sheet(fieldnames, spreadsheet_id, credentials_file="creden
             
             # Add header to the new sheet
             worksheet.append_row(fieldnames)
-            worksheet.format('A1:J1', {'textFormat': {'bold': True}})
+            worksheet.format('A1:K1', {'textFormat': {'bold': True}})
         
         print(f"📊 Spreadsheet URL: {spreadsheet.url}\n")
         
@@ -338,6 +356,10 @@ def process_symbol(symbol, api, fno_df, underlying_ltp_cache, fieldnames):
                         if last_trade_time else "N/A"
                     )
 
+                    # Calculate Vol/OI Ratio
+                    volume = quote.get('volume', 0)
+                    vol_oi_ratio = round(volume / oi, 4) if oi > 0 else "N/A"
+
                     row_data = {
                         'Date'            : date_str,
                         'Symbol'          : symbol,
@@ -345,9 +367,10 @@ def process_symbol(symbol, api, fno_df, underlying_ltp_cache, fieldnames):
                         'Strike'          : strike,
                         'Type'            : opt_type,
                         'LTP'             : ltp,
-                        'Volume'          : quote.get('volume'),
+                        'Volume'          : volume,
                         'OI'              : oi,
                         'OI Change %'     : oi_change_pct,
+                        'Vol/OI Ratio'    : vol_oi_ratio,
                         'Underlying Value': underlying_ltp
                     }
 
@@ -411,24 +434,34 @@ def fetch_live_oi():
     watchlist_set = set(s.upper() for s in watchlist)
 
     creds_file = 'TEST.TXT'
-    creds = get_credentials(creds_file)
+    creds_list = get_credentials(creds_file)
 
-    if not creds.get('api_key') or not creds.get('secret'):
+    if not creds_list or len(creds_list) == 0:
         print("Missing API Key or Secret. Please check TEST.TXT.")
         return
 
+    # Create API instances for all credentials
+    apis = []
+    for i, creds in enumerate(creds_list, 1):
+        try:
+            print(f"Obtaining access token for API #{i}...")
+            access_token = GrowwAPI.get_access_token(
+                api_key=creds['api_key'],
+                secret=creds['secret']
+            )
+            api_instance = GrowwAPI(token=access_token)
+            apis.append(api_instance)
+            print(f"✅ Access token #{i} obtained successfully.")
+        except Exception as e:
+            print(f"❌ Error obtaining token for API #{i}: {e}")
+
+    if not apis:
+        print("Failed to create any API instances.")
+        return
+
     try:
-        print("Obtaining access token...")
-        access_token = GrowwAPI.get_access_token(
-            api_key=creds['api_key'],
-            secret=creds['secret']
-        )
-        print("Access token obtained successfully.")
-
-        api = GrowwAPI(token=access_token)
-
         print("Loading instruments (this may take a moment)...")
-        all_inst = api.get_all_instruments()
+        all_inst = apis[0].get_all_instruments()  # Use first API to get instruments list
 
         # Filter for NSE FNO instruments that match the watchlist - PE only
         fno_df = all_inst[
@@ -447,7 +480,7 @@ def fetch_live_oi():
         csv_filename = "GROWW_OI_Export.csv"
         fieldnames = [
             'Date', 'Symbol', 'Expiry', 'Strike', 'Type',
-            'LTP', 'Volume', 'OI', 'OI Change %',
+            'LTP', 'Volume', 'OI', 'OI Change %', 'Vol/OI Ratio',
             'Underlying Value'
         ]
 
@@ -480,13 +513,17 @@ def fetch_live_oi():
         print(f"{'Symbol':<15} | {'Strike':<10} | {'LTP':<8} | {'OI':<12} | {'OI Chg%':<10}")
         print("-" * 80)
 
-        # Process symbols in parallel with 2 workers to reduce rate limiting
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            # Submit all symbol processing tasks
-            future_to_symbol = {
-                executor.submit(process_symbol, symbol, api, fno_df, underlying_ltp_cache, fieldnames): symbol
-                for symbol in watchlist
-            }
+        # Process symbols in parallel with 4 workers (2 per API for load balancing)
+        num_workers = min(4, len(apis) * 2)  # Scale workers based on number of APIs
+        print(f"Using {len(apis)} API key(s) with {num_workers} parallel workers...")
+        
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all symbol processing tasks, distributing across APIs
+            future_to_symbol = {}
+            for idx, symbol in enumerate(watchlist):
+                api_to_use = apis[idx % len(apis)]  # Round-robin distribution
+                future = executor.submit(process_symbol, symbol, api_to_use, fno_df, underlying_ltp_cache, fieldnames)
+                future_to_symbol[future] = symbol
             
             # Process completed tasks as they finish
             for future in as_completed(future_to_symbol):
