@@ -481,7 +481,7 @@ def fetch_live_oi():
         print("-" * 80)
 
         # Process symbols in parallel with 5 workers
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             # Submit all symbol processing tasks
             future_to_symbol = {
                 executor.submit(process_symbol, symbol, api, fno_df, underlying_ltp_cache, fieldnames): symbol
