@@ -3,6 +3,7 @@ import sys
 import time
 import traceback
 from datetime import datetime
+from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from growwapi import GrowwAPI
 import gspread
@@ -16,58 +17,47 @@ def get_sheet_name_with_timestamp():
     now = datetime.now()
     return now.strftime('%Y-%m-%d_%H%M')
 
-def get_credentials(file_path):
+def get_credentials(env_file='.env'):
     """
-    Reads API Key and Secret (both pairs) from file or environment variables.
-    Priority: Environment variables > File
+    Reads API Key and Secret (both pairs) from .env file or environment variables.
     Returns list of dicts with 'api_key' and 'secret' (supports dual API keys)
     """
     creds_list = []
     
-    # Try environment variables first (for GitHub Actions)
-    api_key_env = os.getenv('GROWW_API_KEY')
-    secret_env = os.getenv('GROWW_SECRET')
+    # Load .env file if it exists
+    if os.path.exists(env_file):
+        load_dotenv(env_file)
+        print(f"Loaded credentials from {env_file}")
+    else:
+        print(f"⚠️ .env file not found, using environment variables...")
     
-    if api_key_env and secret_env:
-        print("Loading credentials from environment variables...")
+    # Try to read first API key pair
+    api_key_1 = os.getenv('GROWW_API_KEY')
+    secret_1 = os.getenv('GROWW_SECRET')
+    
+    if api_key_1 and secret_1:
         creds_list.append({
-            'api_key': api_key_env.strip(),
-            'secret': secret_env.strip()
+            'api_key': api_key_1.strip(),
+            'secret': secret_1.strip()
         })
-        return creds_list
+        print(f"✅ Loaded API credential pair #1")
     
-    # Fall back to file
-    try:
-        with open(file_path, 'r') as f:
-            lines = [line.strip() for line in f.readlines()]
-            print(f"Loading credentials from {file_path}...")
-            
-            # Read first API key pair
-            if len(lines) >= 6:
-                creds_list.append({
-                    'api_key': lines[1],  # Line 2 (API Key/JWT)
-                    'secret': lines[4]     # Line 5 (Secret) - adjusted for label rows
-                })
-            
-            # Read second API key pair if available
-            if len(lines) >= 13:
-                creds_list.append({
-                    'api_key': lines[7],   # Line 8 (API Key 2)
-                    'secret': lines[12]    # Line 13 (Secret 2)
-                })
-                print(f"✅ Loaded {len(creds_list)} API credential pairs")
-            elif len(lines) >= 6:
-                print(f"⚠️ Only one API key found. Using single API key.")
-            else:
-                print("Error: TEST.TXT does not have enough lines.")
-                
-    except FileNotFoundError:
-        print(f"Error: {file_path} not found and environment variables not set.")
-        print("Please either:")
-        print("  1. Create TEST.TXT with API credentials, or")
-        print("  2. Set GROWW_API_KEY and GROWW_SECRET environment variables")
-    except Exception as e:
-        print(f"Error reading credentials: {e}")
+    # Try to read second API key pair
+    api_key_2 = os.getenv('GROWW_API_KEY_2')
+    secret_2 = os.getenv('GROWW_SECRET_2')
+    
+    if api_key_2 and secret_2:
+        creds_list.append({
+            'api_key': api_key_2.strip(),
+            'secret': secret_2.strip()
+        })
+        print(f"✅ Loaded API credential pair #2")
+    
+    if len(creds_list) > 1:
+        print(f"✅ Total: {len(creds_list)} API credential pairs loaded")
+    elif len(creds_list) == 0:
+        print(f"❌ Error: No API credentials found in .env or environment variables.")
+        print(f"   Please create .env file with GROWW_API_KEY and GROWW_SECRET.")
     
     return creds_list
 
@@ -330,7 +320,7 @@ def process_symbol(symbol, api, fno_df, underlying_ltp_cache, fieldnames):
                         segment=row['segment']
                     )
                     
-                    # Delay to avoid rate limiting (0.15s with 2 parallel workers = ~13 req/sec)
+                    # Delay to avoid rate limiting (0.2s with 4 workers = ~10 req/sec per API)
                     time.sleep(0.20)
 
                     oi = quote.get('open_interest', 0)
@@ -433,11 +423,10 @@ def fetch_live_oi():
     # Normalize watchlist for case-insensitive matching
     watchlist_set = set(s.upper() for s in watchlist)
 
-    creds_file = 'TEST.TXT'
-    creds_list = get_credentials(creds_file)
+    creds_list = get_credentials()  # Reads from .env or environment variables
 
     if not creds_list or len(creds_list) == 0:
-        print("Missing API Key or Secret. Please check TEST.TXT.")
+        print("Missing API credentials. Please check .env file or set environment variables.")
         return
 
     # Create API instances for all credentials
