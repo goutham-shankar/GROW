@@ -312,8 +312,8 @@ def process_symbol(symbol, api, fno_df, underlying_ltp_cache, fieldnames):
                         segment=row['segment']
                     )
                     
-                    # Small delay to avoid rate limiting (reduced with 5 parallel workers)
-                    time.sleep(0.02)
+                    # Delay to avoid rate limiting (0.15s with 2 parallel workers = ~13 req/sec)
+                    time.sleep(0.20)
 
                     oi = quote.get('open_interest', 0)
                     if oi == 0:
@@ -480,7 +480,7 @@ def fetch_live_oi():
         print(f"{'Symbol':<15} | {'Strike':<10} | {'LTP':<8} | {'OI':<12} | {'OI Chg%':<10}")
         print("-" * 80)
 
-        # Process symbols in parallel with 5 workers
+        # Process symbols in parallel with 2 workers to reduce rate limiting
         with ThreadPoolExecutor(max_workers=2) as executor:
             # Submit all symbol processing tasks
             future_to_symbol = {
