@@ -524,7 +524,7 @@ def process_symbol(symbol, api, fno_df, underlying_ltp_cache, fieldnames):
         # Cache the underlying LTP
         underlying_ltp_cache[symbol] = underlying_ltp
 
-        # 2. Filter PE options for this underlying
+        # 2. Filter PE/CE options for this underlying
         stock_options = fno_df[fno_df['trading_symbol'].str.startswith(symbol.upper())]
 
         if stock_options.empty:
@@ -532,8 +532,8 @@ def process_symbol(symbol, api, fno_df, underlying_ltp_cache, fieldnames):
 
         for _, row in stock_options.iterrows():
             ts = row['trading_symbol']
-            # e.g. RELIANCE26MAR2600PE
-            match = re.search(r'(\d+[A-Z]{3})(\d+)(PE)$', ts)
+            # e.g. RELIANCE26MAR2600PE or RELIANCE26MAR2600CE
+            match = re.search(r'(\d+[A-Z]{3})(\d+)(PE|CE)$', ts)
             if not match:
                 continue
 
@@ -542,73 +542,69 @@ def process_symbol(symbol, api, fno_df, underlying_ltp_cache, fieldnames):
                 continue  # Only include 30 March expiry
 
             strike    = float(match.group(2))
-            opt_type  = match.group(3)  # Always 'PE'
+            opt_type  = match.group(3)  # 'PE' or 'CE'
 
-            # Apply 5% Filtering Logic - PE only (strike <= 95% of underlying)
-            keep = strike <= (underlying_ltp * 0.95)
+            try:
+                quote = api.get_quote(
+                    trading_symbol=ts,
+                    exchange=row['exchange'],
+                    segment=row['segment']
+                )
+                
+                # Delay to avoid rate limiting (0.2s with 4 workers = ~10 req/sec per API)
+                time.sleep(0.20)
 
-            if keep:
-                try:
-                    quote = api.get_quote(
-                        trading_symbol=ts,
-                        exchange=row['exchange'],
-                        segment=row['segment']
-                    )
-                    
-                    # Delay to avoid rate limiting (0.2s with 4 workers = ~10 req/sec per API)
-                    time.sleep(0.20)
+                oi = quote.get('open_interest', 0)
+                if oi == 0:
+                    continue  # Skip if OI is 0
 
-                    oi = quote.get('open_interest', 0)
-                    if oi == 0:
-                        continue  # Skip if OI is 0
+                ltp       = quote.get('last_price')
+                close     = quote.get('close')       # Previous day close
+                oi_change = quote.get('oi_day_change')
 
-                    ltp       = quote.get('last_price')
-                    close     = quote.get('close')       # Previous day close
-                    oi_change = quote.get('oi_day_change')
+                # ── OI Change % ──────────────────────────────────────
+                # prev_oi = today's OI minus today's change
+                prev_oi = (oi - oi_change) if (oi_change is not None) else None
+                if prev_oi and prev_oi > 0:
+                    oi_change_pct = round((oi_change / prev_oi) * 100, 2)
+                else:
+                    oi_change_pct = "N/A"
 
-                    # ── OI Change % ──────────────────────────────────────
-                    # prev_oi = today's OI minus today's change
-                    prev_oi = (oi - oi_change) if (oi_change is not None) else None
-                    if prev_oi and prev_oi > 0:
-                        oi_change_pct = round((oi_change / prev_oi) * 100, 2)
-                    else:
-                        oi_change_pct = "N/A"
+                # Map fields
+                last_trade_time = quote.get('last_trade_time')
+                date_str = (
+                    datetime.fromtimestamp(last_trade_time).strftime('%Y-%m-%d %H:%M:%S')
+                    if last_trade_time else "N/A"
+                )
 
-                    # Map fields
-                    last_trade_time = quote.get('last_trade_time')
-                    date_str = (
-                        datetime.fromtimestamp(last_trade_time).strftime('%Y-%m-%d %H:%M:%S')
-                        if last_trade_time else "N/A"
-                    )
+                # Calculate Vol/OI Ratio
+                volume = quote.get('volume', 0)
+                vol_oi_ratio = round(volume / oi, 4) if oi > 0 else "N/A"
 
-                    # Calculate Vol/OI Ratio
-                    volume = quote.get('volume', 0)
-                    vol_oi_ratio = round(volume / oi, 4) if oi > 0 else "N/A"
+                row_data = {
+                    'Date'            : date_str,
+                    'Symbol'          : symbol,
+                    'Expiry'          : expiry_str,
+                    'Strike'          : strike,
+                    'Type'            : opt_type,
+                    'LTP'             : ltp,
+                    'Volume'          : volume,
+                    'OI'              : oi,
+                    'OI Change %'     : oi_change_pct,
+                    'Vol/OI Ratio'    : vol_oi_ratio,
+                    'Underlying Value': underlying_ltp
+                }
 
-                    row_data = {
-                        'Date'            : date_str,
-                        'Symbol'          : symbol,
-                        'Expiry'          : expiry_str,
-                        'Strike'          : strike,
-                        'Type'            : opt_type,
-                        'LTP'             : ltp,
-                        'Volume'          : volume,
-                        'OI'              : oi,
-                        'OI Change %'     : oi_change_pct,
-                        'Vol/OI Ratio'    : vol_oi_ratio,
-                        'Underlying Value': underlying_ltp
-                    }
+                symbol_data.append(row_data)
 
-                    symbol_data.append(row_data)
+                oi_pct_display = f"{oi_change_pct}%" if oi_change_pct != "N/A" else "N/A"
+                print(
+                    f"{symbol:<15} | {strike:<10} | {opt_type:<4} | {str(ltp):<8} | "
+                    f"{oi:<12} | {oi_pct_display:<10}"
+                )
 
-                    oi_pct_display = f"{oi_change_pct}%" if oi_change_pct != "N/A" else "N/A"
-                    print(
-                        f"{symbol:<15} | {strike:<10} | {str(ltp):<8} | "
-                        f"{oi:<12} | {oi_pct_display:<10}"
-                    )
-
-                except Exception:
-                    continue
+            except Exception:
+                continue
 
     except Exception as e:
         print(f"Error processing {symbol}: {e}")
@@ -700,15 +696,15 @@ def fetch_live_oi():
         fno_df = all_inst[
             (all_inst['exchange'] == 'NSE') &
             (all_inst['segment'] == 'FNO') &
-            (all_inst['instrument_type'] == 'PE') &
+            (all_inst['instrument_type'].isin(['PE', 'CE'])) &
             (all_inst['underlying_symbol'].str.upper().isin(watchlist_set))
         ]
 
         if fno_df.empty:
-            print("No matching F&O PE instruments found for the watchlist.")
+            print("No matching F&O PE/CE instruments found for the watchlist.")
             return
 
-        print(f"Found {len(fno_df)} total F&O PE instruments.")
+        print(f"Found {len(fno_df)} total F&O PE/CE instruments.")
 
         csv_filename = "GROWW_OI_Export.csv"
         fieldnames = [
@@ -742,7 +738,7 @@ def fetch_live_oi():
         underlying_ltp_cache = {}  # Cache for underlying LTPs
         
         print(f"Processing watchlist with 5 parallel workers (30MAR expiry)...")
-        print(f"{'Symbol':<15} | {'Strike':<10} | {'LTP':<8} | {'OI':<12} | {'OI Chg%':<10}")
+        print(f"{'Symbol':<15} | {'Strike':<10} | {'Type':<4} | {'LTP':<8} | {'OI':<12} | {'OI Chg%':<10}")
         print("-" * 80)
 
         # Process symbols in parallel with 4 workers (2 per API for load balancing)
